@@ -1,0 +1,13 @@
+# Runtime/vendor directories
+MySQL5.1/
+tmp/
+artifacts/
+
+# Windows executables and binary runtime files
+*.[eE][xX][eE]
+*.[dD][lL][lL]
+*.[oO][cC][xX]
+
+# Local runtime/config files
+*.log
+*.pid
