@@ -1,0 +1,39 @@
+frontend/node_modules/
+frontend/dist/
+backend/api.exe
+
+# Debug browser profiles and generated test output
+.chrome-codex-debug/
+.gocache/
+artifacts/
+test-results/
+tmp/
+backend/.gocache/
+backend/artifacts/
+backend/bin/
+tools/downloads/
+tools/jre/
+tools/rabcdasm/
+
+# Local debug probes and temporary inspection files
+check_*.ps1
+click_inner_test*.ps1
+diagnose_*.ps1
+temp_*
+tmp.*
+scan_tmp.txt
+wc_tmp.txt
+hermes_probe.txt
+guide_g6_decoded.txt
+inspect_*
+
+# Runtime output
+*.log
+*.err
+*.out
+*.stderr
+*.stdout
+*.exe
+*.exe~
+*.zip
+*.7z
