@@ -1,6 +1,11 @@
 # Runtime/vendor directories
 MySQL5.1/
 Apache/
+PHP/
+SendMail/
+Zend/
+www/
+修改器/
 tmp/
 artifacts/
 
@@ -12,3 +17,11 @@ artifacts/
 # Local runtime/config files
 *.log
 *.pid
+/*.ini
+/*.url
+/*.doc
+/WinSock2.rep
+/scripts/
+/CLAUDE.md
+/RECONSTRUCTION_AUDIT.md
+/*.txt
