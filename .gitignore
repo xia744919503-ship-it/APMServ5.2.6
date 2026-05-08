@@ -1,5 +1,6 @@
 # Runtime/vendor directories
 MySQL5.1/
+Apache/
 tmp/
 artifacts/
 
