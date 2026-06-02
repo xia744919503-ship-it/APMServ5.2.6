@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -451,36 +450,20 @@ func (r *Repository) loadSoldierNames(ctx context.Context) map[int]string {
 }
 
 func parseTroopSoldiers(raw string, soldierNames map[int]string) ([]Soldier, int64) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "0" {
+	pairs := parseTroopSoldierPairs(raw)
+	if len(pairs) == 0 {
 		return []Soldier{}, 0
 	}
 
-	parts := strings.Split(raw, ",")
-	items := make([]Soldier, 0, len(parts)/2)
+	items := make([]Soldier, 0, len(pairs))
 	var total int64
-	for index := 0; index+1 < len(parts); index += 2 {
-		sidText := strings.TrimSpace(parts[index])
-		countText := strings.TrimSpace(parts[index+1])
-		if sidText == "" || countText == "" {
-			continue
-		}
-
-		sid, err := strconv.Atoi(sidText)
-		if err != nil {
-			continue
-		}
-		count, err := strconv.ParseInt(countText, 10, 64)
-		if err != nil {
-			continue
-		}
-
+	for _, pair := range pairs {
 		items = append(items, Soldier{
-			SID:   sid,
-			Name:  firstNonEmpty(soldierNames[sid], fmt.Sprintf("SID %d", sid)),
-			Count: count,
+			SID:   pair.sid,
+			Name:  firstNonEmpty(soldierNames[pair.sid], fmt.Sprintf("SID %d", pair.sid)),
+			Count: pair.count,
 		})
-		total += count
+		total += pair.count
 	}
 
 	return items, total

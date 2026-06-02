@@ -26,6 +26,62 @@ func (s plunderTargetSnapshot) minimalEligible() bool {
 	return s.Soldiers <= 0 && s.Defences <= 0 && s.Stationed <= 0 && s.Heroes <= 0
 }
 
+func buildWorldTargetSnapshot(cid int, worldType int, typeName string) plunderTargetSnapshot {
+	return plunderTargetSnapshot{
+		UID:      0,
+		CityName: formatWorldTargetName(cid, worldType, typeName),
+	}
+}
+
+func formatWorldTargetName(cid int, worldType int, typeName string) string {
+	name := strings.TrimSpace(typeName)
+	if name == "" {
+		name = fmt.Sprintf("Type%d", worldType)
+	}
+	return name + formatCIDLabel(cid)
+}
+
+func (r *Repository) loadWorldTargetSnapshotTx(ctx context.Context, tx *sql.Tx, cid int) (plunderTargetSnapshot, error) {
+	var (
+		worldType int
+		typeName  string
+	)
+	if r.worldTypes != nil {
+		typeName = r.worldTypes[worldType]
+	}
+
+	if err := tx.QueryRowContext(ctx, "select type from mem_world where wid = ?", cidToWid(cid)).Scan(&worldType); err != nil {
+		return plunderTargetSnapshot{}, err
+	}
+	if worldType <= 0 {
+		return plunderTargetSnapshot{}, sql.ErrNoRows
+	}
+	if r.worldTypes != nil {
+		typeName = r.worldTypes[worldType]
+	}
+	if strings.TrimSpace(typeName) == "" {
+		typeName = defaultWorldTypes()[worldType]
+	}
+
+	return buildWorldTargetSnapshot(cid, worldType, typeName), nil
+}
+
+func (r *Repository) loadScoutTargetSnapshotTx(ctx context.Context, tx *sql.Tx, cid int) (plunderTargetSnapshot, bool, error) {
+	snapshot, err := r.loadPlunderTargetSnapshotTx(ctx, tx, cid)
+	if err == nil {
+		return snapshot, true, nil
+	}
+	if err != sql.ErrNoRows {
+		return plunderTargetSnapshot{}, false, err
+	}
+
+	snapshot, err = r.loadWorldTargetSnapshotTx(ctx, tx, cid)
+	if err != nil {
+		return plunderTargetSnapshot{}, false, err
+	}
+	return snapshot, false, nil
+}
+
 func (r *Repository) loadPlunderTargetSnapshotTx(ctx context.Context, tx *sql.Tx, cid int) (plunderTargetSnapshot, error) {
 	var (
 		snapshot       plunderTargetSnapshot
@@ -178,6 +234,13 @@ func computePlunderLoot(snapshot plunderTargetSnapshot, capacity int64) TroopRes
 	}
 
 	return loot
+}
+
+func plunderLootForSettlement(snapshot plunderTargetSnapshot, capacity int64) TroopResource {
+	if !snapshot.minimalEligible() {
+		return TroopResource{}
+	}
+	return computePlunderLoot(snapshot, capacity)
 }
 
 func (r *Repository) cityNameTx(ctx context.Context, tx *sql.Tx, cid int) string {

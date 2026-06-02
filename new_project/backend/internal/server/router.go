@@ -68,6 +68,16 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/me/charge", s.handleMyCharge)
 	mux.HandleFunc("/api/me/charge/exchange", s.handleMyChargeExchange)
 	mux.HandleFunc("/api/me/troops", s.handleMyTroops)
+	mux.HandleFunc("/api/battle/field-state", s.handleBattleFieldState)
+	mux.HandleFunc("/api/battle/quit-preview", s.handleBattleQuitPreview)
+	mux.HandleFunc("/api/battle/troop-detail", s.handleBattleTroopDetail)
+	mux.HandleFunc("/api/battle/army-send-preview", s.handleBattleArmySendPreview)
+	mux.HandleFunc("/api/battle/campaign-preview", s.handleBattleCampaignPreview)
+	mux.HandleFunc("/api/battle/army-attack-preview", s.handleBattleArmyAttackPreview)
+	mux.HandleFunc("/api/battle/patrol-preview", s.handleBattlePatrolPreview)
+	mux.HandleFunc("/api/battle/tasks", s.handleBattleTasks)
+	mux.HandleFunc("/api/battle/members", s.handleBattleMembers)
+	mux.HandleFunc("/api/battle/news", s.handleBattleNews)
 	mux.HandleFunc("/api/troops/", s.handleTroopRoute)
 	mux.HandleFunc("/api/mail/delete", s.handleMailDelete)
 	mux.HandleFunc("/api/mail/send", s.handleMailSend)
@@ -786,6 +796,37 @@ func (s Server) handleMyTaskClaim(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, snapshot)
 }
 
+func (s Server) handleBattleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	bid, err := strconv.Atoi(defaultString(r.URL.Query().Get("bid"), "0"))
+	if err != nil || bid < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid bid")
+		return
+	}
+	unionID, err := strconv.Atoi(defaultString(r.URL.Query().Get("unionId"), "0"))
+	if err != nil || unionID < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid unionId")
+		return
+	}
+
+	payload, err := s.service.BattleTasksSnapshot(r.Context(), uid, bid, unionID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
 func (s Server) handleMyShop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -901,6 +942,301 @@ func (s Server) handleMyTroops(w http.ResponseWriter, r *http.Request) {
 	payload, err := s.service.MyTroops(r.Context(), uid, limit)
 	if err != nil {
 		httpjson.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattleFieldState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	battlefieldID, err := strconv.Atoi(defaultString(r.URL.Query().Get("battlefieldId"), "0"))
+	if err != nil || battlefieldID < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid battlefieldId")
+		return
+	}
+	unionID, err := strconv.Atoi(defaultString(r.URL.Query().Get("unionId"), "0"))
+	if err != nil || unionID < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid unionId")
+		return
+	}
+	cid, err := strconv.Atoi(defaultString(r.URL.Query().Get("cid"), "0"))
+	if err != nil || cid < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid cid")
+		return
+	}
+
+	payload, err := s.service.BattleFieldState(r.Context(), uid, battlefieldID, unionID, cid, r.URL.Query().Get("name"))
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattleQuitPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	payload, err := s.service.BattleQuitPreview(r.Context(), uid)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattleTroopDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	troopID, err := strconv.Atoi(defaultString(r.URL.Query().Get("troopId"), "0"))
+	if err != nil || troopID <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid troopId")
+		return
+	}
+
+	payload, err := s.service.BattleTroopDetail(r.Context(), uid, troopID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattleArmySendPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	troopID, err := strconv.Atoi(defaultString(r.URL.Query().Get("troopId"), "0"))
+	if err != nil || troopID <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid troopId")
+		return
+	}
+	targetCID, err := strconv.Atoi(defaultString(r.URL.Query().Get("targetCid"), "0"))
+	if err != nil || targetCID <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid targetCid")
+		return
+	}
+
+	payload, err := s.service.BattleArmySendPreview(r.Context(), uid, troopID, targetCID, r.URL.Query().Get("targetName"))
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattleCampaignPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	cid, err := strconv.Atoi(defaultString(r.URL.Query().Get("cid"), "0"))
+	if err != nil || cid <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid cid")
+		return
+	}
+	targetCID, err := strconv.Atoi(defaultString(r.URL.Query().Get("targetCid"), "0"))
+	if err != nil || targetCID < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid targetCid")
+		return
+	}
+	heroID, err := strconv.Atoi(defaultString(r.URL.Query().Get("heroId"), "0"))
+	if err != nil || heroID < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid heroId")
+		return
+	}
+
+	soldiers := map[int]int64{}
+	for _, raw := range r.URL.Query()["soldiers"] {
+		parts := strings.SplitN(raw, ":", 2)
+		if len(parts) != 2 {
+			httpjson.Error(w, http.StatusBadRequest, "invalid soldiers")
+			return
+		}
+		sid, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil || sid <= 0 {
+			httpjson.Error(w, http.StatusBadRequest, "invalid soldier sid")
+			return
+		}
+		count, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+		if err != nil || count < 0 {
+			httpjson.Error(w, http.StatusBadRequest, "invalid soldier count")
+			return
+		}
+		if count > 0 {
+			soldiers[sid] += count
+		}
+	}
+	useFlag := strings.EqualFold(r.URL.Query().Get("useFlag"), "true") || r.URL.Query().Get("useFlag") == "1"
+
+	payload, err := s.service.BattleCampaignPreview(r.Context(), uid, cid, targetCID, heroID, soldiers, useFlag)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattleArmyAttackPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	troopID, err := strconv.Atoi(defaultString(r.URL.Query().Get("troopId"), "0"))
+	if err != nil || troopID <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid troopId")
+		return
+	}
+	targetTroopID, err := strconv.Atoi(defaultString(r.URL.Query().Get("targetTroopId"), "0"))
+	if err != nil || targetTroopID <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid targetTroopId")
+		return
+	}
+
+	payload, err := s.service.BattleArmyAttackPreview(r.Context(), uid, troopID, targetTroopID, r.URL.Query().Get("targetName"))
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattlePatrolPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	troopID, err := strconv.Atoi(defaultString(r.URL.Query().Get("troopId"), "0"))
+	if err != nil || troopID <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid troopId")
+		return
+	}
+	targetTroopID, err := strconv.Atoi(defaultString(r.URL.Query().Get("targetTroopId"), "0"))
+	if err != nil || targetTroopID <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid targetTroopId")
+		return
+	}
+
+	payload, err := s.service.BattlePatrolPreview(r.Context(), uid, troopID, targetTroopID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattleMembers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	payload, err := s.service.BattleMembersSnapshot(r.Context(), uid)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+
+	httpjson.Write(w, http.StatusOK, payload)
+}
+
+func (s Server) handleBattleNews(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpjson.Error(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	uid, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	battlefieldID, err := strconv.Atoi(defaultString(r.URL.Query().Get("battlefieldId"), "0"))
+	if err != nil || battlefieldID < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid battlefieldId")
+		return
+	}
+	unionID, err := strconv.Atoi(defaultString(r.URL.Query().Get("unionId"), "0"))
+	if err != nil || unionID < 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid unionId")
+		return
+	}
+	page, err := strconv.Atoi(defaultString(r.URL.Query().Get("page"), "1"))
+	if err != nil || page <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(defaultString(r.URL.Query().Get("pageSize"), "10"))
+	if err != nil || pageSize <= 0 {
+		httpjson.Error(w, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
+
+	payload, err := s.service.BattleFieldNewsPage(r.Context(), uid, battlefieldID, unionID, page, pageSize)
+	if err != nil {
+		s.writeDomainError(w, err)
 		return
 	}
 
@@ -1719,12 +2055,19 @@ func (s Server) handleCityTroopDispatch(w http.ResponseWriter, r *http.Request, 
 	}
 
 	var payload struct {
-		TargetCID    int                   `json:"targetCid"`
-		SoldierSID   int                   `json:"soldierSid"`
-		SoldierCount int                   `json:"soldierCount"`
-		Task         *int                  `json:"task"`
-		Resources    *legacy.TroopResource `json:"resources"`
-		Resource     *legacy.TroopResource `json:"resource"`
+		TargetCID    int `json:"targetCid"`
+		SoldierSID   int `json:"soldierSid"`
+		SoldierCount int `json:"soldierCount"`
+		Soldiers     []struct {
+			SID   int   `json:"sid"`
+			TID   int   `json:"tid"`
+			Count int64 `json:"count"`
+		} `json:"soldiers"`
+		HeroID    int                   `json:"heroId"`
+		HID       int                   `json:"hid"`
+		Task      *int                  `json:"task"`
+		Resources *legacy.TroopResource `json:"resources"`
+		Resource  *legacy.TroopResource `json:"resource"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		httpjson.Error(w, http.StatusBadRequest, "invalid request body")
@@ -1741,8 +2084,26 @@ func (s Server) handleCityTroopDispatch(w http.ResponseWriter, r *http.Request, 
 	} else if payload.Resource != nil {
 		resource = *payload.Resource
 	}
+	soldiers := make(map[int]int64, len(payload.Soldiers)+1)
+	for _, item := range payload.Soldiers {
+		sid := item.SID
+		if sid <= 0 {
+			sid = item.TID
+		}
+		if sid > 0 && item.Count > 0 {
+			soldiers[sid] += item.Count
+		}
+	}
+	if len(soldiers) == 0 && payload.SoldierSID > 0 && payload.SoldierCount > 0 {
+		soldiers[payload.SoldierSID] = int64(payload.SoldierCount)
+	}
 
-	page, err := s.service.DispatchCityTroop(r.Context(), uid, cid, payload.TargetCID, payload.SoldierSID, payload.SoldierCount, task, resource)
+	heroID := payload.HeroID
+	if heroID <= 0 {
+		heroID = payload.HID
+	}
+
+	page, err := s.service.DispatchCityTroop(r.Context(), uid, cid, payload.TargetCID, soldiers, heroID, task, resource)
 	if err != nil {
 		s.writeDomainError(w, err)
 		return

@@ -868,3 +868,231 @@ type TroopPage struct {
 	Gathering int         `json:"gathering"`
 	Items     []TroopCard `json:"items"`
 }
+
+type BattleFieldTroopRow struct {
+	ID            int       `json:"id"`
+	UID           int       `json:"uid"`
+	CID           int       `json:"cid"`
+	TargetCID     int       `json:"targetCid"`
+	StartCID      int       `json:"startCid"`
+	BattlefieldID int       `json:"battlefieldId"`
+	BattleUnionID int       `json:"battleUnionId"`
+	HeroID        int       `json:"heroId"`
+	Name          string    `json:"name"`
+	Union         string    `json:"union"`
+	Hero          string    `json:"hero"`
+	Level         int       `json:"level"`
+	State         int       `json:"state"`
+	StateLabel    string    `json:"stateLabel"`
+	SoldiersRaw   string    `json:"soldiersRaw"`
+	Soldiers      []Soldier `json:"soldiers"`
+	SoldierCount  int64     `json:"soldierCount"`
+	CanView       bool      `json:"canView"`
+	CanPatrol     bool      `json:"canPatrol"`
+	CanAttack     bool      `json:"canAttack"`
+}
+
+type BattleFieldCityInfo struct {
+	CID           int    `json:"cid"`
+	BattlefieldID int    `json:"battlefieldId"`
+	Name          string `json:"name"`
+	UID           int    `json:"uid"`
+	UnionID       int    `json:"unionId"`
+	HasUser       bool   `json:"hasUser"`
+	Flag          int    `json:"flag"`
+	FlagLabel     string `json:"flagLabel"`
+	FlagChar      string `json:"flagChar"`
+}
+
+type BattleFieldCurrentTroop struct {
+	ID           int       `json:"id"`
+	CID          int       `json:"cid"`
+	SoldiersRaw  string    `json:"soldiersRaw"`
+	Soldiers     []Soldier `json:"soldiers"`
+	SoldierCount int64     `json:"soldierCount"`
+	HeroName     string    `json:"heroName"`
+	HeroLevel    int       `json:"heroLevel"`
+	Face         int       `json:"face"`
+	Sex          int       `json:"sex"`
+}
+
+type BattleFieldInfo struct {
+	Name        string `json:"name"`
+	BID         int    `json:"bid"`
+	MinPeople   int    `json:"minPeople"`
+	MaxPeople   int    `json:"maxPeople"`
+	MaxLevel    int    `json:"maxLevel"`
+	Level       int    `json:"level"`
+	State       int    `json:"state"`
+	StartTime   int64  `json:"startTime"`
+	EndTime     int64  `json:"endTime"`
+	Winner      int    `json:"winner"`
+	Content     string `json:"content"`
+	PeopleTotal int    `json:"peopleTotal"`
+	Image       string `json:"image"`
+}
+
+type BattleFieldWinPoint struct {
+	BattlefieldID int    `json:"battlefieldId"`
+	UnionID       int    `json:"unionId"`
+	Point         int    `json:"point"`
+	NextReset     int64  `json:"nextReset"`
+	Interval      int    `json:"interval"`
+	BID           int    `json:"bid"`
+	PointCount    int    `json:"pointCount"`
+	PointName     string `json:"pointName"`
+	State         int    `json:"state"`
+}
+
+type BattleFieldNewsItem struct {
+	ID       int    `json:"id"`
+	BattleID int    `json:"battleId"`
+	UnionID  int    `json:"unionId"`
+	Content  string `json:"content"`
+	LogTime  int64  `json:"logTime"`
+	Time     string `json:"time"`
+	Color    int    `json:"color"`
+	OwnUnion bool   `json:"ownUnion"`
+}
+
+type BattleQuitPreview struct {
+	Result      int    `json:"result"`
+	Message     string `json:"message"`
+	HonourDelta int    `json:"honourDelta"`
+	ReadOnly    bool   `json:"readOnly"`
+}
+
+type BattleTroopDetail struct {
+	ID            int                 `json:"id"`
+	UID           int                 `json:"uid"`
+	CID           int                 `json:"cid"`
+	TargetCID     int                 `json:"targetCid"`
+	BattleUnionID int                 `json:"battleUnionId"`
+	Name          string              `json:"name"`
+	Union         string              `json:"union"`
+	HeroID        int                 `json:"heroId"`
+	Hero          string              `json:"hero"`
+	Level         int                 `json:"level"`
+	State         int                 `json:"state"`
+	StateLabel    string              `json:"stateLabel"`
+	TargetName    string              `json:"targetName"`
+	PathTime      int                 `json:"pathTime"`
+	EndTime       int64               `json:"endTime"`
+	SecondsLeft   int64               `json:"secondsLeft"`
+	SoldiersRaw   string              `json:"soldiersRaw"`
+	Soldiers      []Soldier           `json:"soldiers"`
+	SoldierCount  int64               `json:"soldierCount"`
+	Buffers       []BattleTroopBuffer `json:"buffers"`
+	ReadOnly      bool                `json:"readOnly"`
+}
+
+type BattleTroopBuffer struct {
+	BufType  int `json:"bufType"`
+	BufParam int `json:"bufParam"`
+}
+
+type BattleArmySendPreview struct {
+	Troop    BattleTroopDetail `json:"troop"`
+	TargetID int               `json:"targetId"`
+	Target   string            `json:"target"`
+	PathTime int               `json:"pathTime"`
+	Arrival  int64             `json:"arrival"`
+	ReadOnly bool              `json:"readOnly"`
+	Message  string            `json:"message"`
+}
+
+type BattleCampaignPreview struct {
+	CID                 int       `json:"cid"`
+	TargetCID           int       `json:"targetCid"`
+	Target              string    `json:"target"`
+	FieldName           string    `json:"fieldName"`
+	HeroID              int       `json:"heroId"`
+	Soldiers            []Soldier `json:"soldiers"`
+	SoldierCount        int64     `json:"soldierCount"`
+	People              int64     `json:"people"`
+	FoodUse             int64     `json:"foodUse"`
+	PathTime            int       `json:"pathTime"`
+	Arrival             int64     `json:"arrival"`
+	GroundLevel         int       `json:"groundLevel"`
+	Capacity            int64     `json:"capacity"`
+	CurrentBattleTroops int       `json:"currentBattleTroops"`
+	CurrentCityTroops   int       `json:"currentCityTroops"`
+	FlagCount           int64     `json:"flagCount"`
+	UseFlag             bool      `json:"useFlag"`
+	Blocked             bool      `json:"blocked"`
+	Reason              string    `json:"reason"`
+	ReadOnly            bool      `json:"readOnly"`
+	Message             string    `json:"message"`
+}
+
+type BattleArmyAttackPreview struct {
+	Troop      BattleTroopDetail `json:"troop"`
+	Target     BattleTroopDetail `json:"target"`
+	TargetID   int               `json:"targetId"`
+	TargetName string            `json:"targetName"`
+	PathTime   int               `json:"pathTime"`
+	Arrival    int64             `json:"arrival"`
+	ReadOnly   bool              `json:"readOnly"`
+	Message    string            `json:"message"`
+}
+
+type BattlePatrolPreview struct {
+	Troop       BattleTroopDetail `json:"troop"`
+	Target      BattleTroopDetail `json:"target"`
+	TargetID    int               `json:"targetId"`
+	TargetName  string            `json:"targetName"`
+	TargetCity  string            `json:"targetCity"`
+	Report      string            `json:"report"`
+	ReportLines []string          `json:"reportLines"`
+	PigeonCount int64             `json:"pigeonCount"`
+	Blocked     bool              `json:"blocked"`
+	ReadOnly    bool              `json:"readOnly"`
+	Message     string            `json:"message"`
+}
+
+type BattleMemberRow struct {
+	ID        int    `json:"id"`
+	UID       int    `json:"uid"`
+	Name      string `json:"name"`
+	Camp      string `json:"camp"`
+	State     string `json:"state"`
+	HeroCount int    `json:"herocount"`
+	Honour    int64  `json:"honour"`
+	Cancel    bool   `json:"cancel"`
+	InviteID  int    `json:"inviteId"`
+	Invited   bool   `json:"invited"`
+}
+
+type BattleMembersSnapshot struct {
+	Rows      []BattleMemberRow `json:"rows"`
+	InCount   int               `json:"inCount"`
+	IsCreator bool              `json:"isCreator"`
+	ReadOnly  bool              `json:"readOnly"`
+	Message   string            `json:"message"`
+}
+
+type BattleFieldNewsPage struct {
+	Page      int                   `json:"page"`
+	PageSize  int                   `json:"pageSize"`
+	Total     int                   `json:"total"`
+	PageCount int                   `json:"pageCount"`
+	Items     []BattleFieldNewsItem `json:"items"`
+	ReadOnly  bool                  `json:"readOnly"`
+	Message   string                `json:"message"`
+}
+
+type BattleFieldState struct {
+	FieldName     string                    `json:"fieldName"`
+	CID           int                       `json:"cid"`
+	BattlefieldID int                       `json:"battlefieldId"`
+	BID           int                       `json:"bid"`
+	UnionID       int                       `json:"unionId"`
+	CanSend       bool                      `json:"canSend"`
+	Info          BattleFieldInfo           `json:"info"`
+	NewsTotal     int                       `json:"newsTotal"`
+	News          []BattleFieldNewsItem     `json:"news"`
+	Rows          []BattleFieldTroopRow     `json:"rows"`
+	Cities        []BattleFieldCityInfo     `json:"cities"`
+	CurrentTroops []BattleFieldCurrentTroop `json:"currentTroops"`
+	WinPoints     []BattleFieldWinPoint     `json:"winPoints"`
+}

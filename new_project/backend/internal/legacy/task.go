@@ -266,6 +266,328 @@ order by tid asc, type asc, sort asc`, goalQuery), goalArgs...)
 	return snapshot, nil
 }
 
+func (r *Repository) BattleTasksSnapshot(ctx context.Context, uid int, bidHint int, unionIDHint int) (TaskSnapshot, error) {
+	snapshot := TaskSnapshot{
+		Categories: []TaskCategory{},
+	}
+	if r.db == nil {
+		return snapshot, nil
+	}
+
+	bid, unionID, err := r.currentBattleTaskContext(ctx, uid)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	if bid <= 0 {
+		bid = bidHint
+	}
+	if unionID <= 0 {
+		unionID = unionIDHint
+	}
+	groupIDs := battleTaskGroupIDs(bid, unionID)
+	if len(groupIDs) == 0 {
+		return snapshot, nil
+	}
+
+	groupQuery, groupArgs := taskIDInQuery(groupIDs)
+	groupRows, err := r.db.QueryContext(ctx, fmt.Sprintf(`
+select
+	g.id,
+	g.type,
+	g.name,
+	g.description
+from cfg_task_group g
+where g.id in (%s)
+order by g.type asc, g.id asc`, groupQuery), groupArgs...)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	defer groupRows.Close()
+
+	groupMap := make(map[int]*TaskGroup)
+	groupIDsByType := make(map[int][]int)
+	categoryOrder := make([]int, 0, 4)
+	for groupRows.Next() {
+		group := &TaskGroup{
+			Tasks: []TaskCard{},
+		}
+		if err := groupRows.Scan(&group.ID, &group.Type, &group.Name, &group.Description); err != nil {
+			return TaskSnapshot{}, err
+		}
+		group.Type = 3
+		group.TypeLabel = taskGroupTypeLabel(group.Type)
+		groupMap[group.ID] = group
+		if _, exists := groupIDsByType[group.Type]; !exists {
+			categoryOrder = append(categoryOrder, group.Type)
+		}
+		groupIDsByType[group.Type] = append(groupIDsByType[group.Type], group.ID)
+	}
+	if err := groupRows.Err(); err != nil {
+		return TaskSnapshot{}, err
+	}
+
+	tasksByGroup, taskByID, taskIDs, err := r.battleTaskCards(ctx, uid, groupIDs)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	if len(taskIDs) == 0 {
+		return snapshot, nil
+	}
+
+	eval := newTaskEvalContext(r, uid)
+	goalsByTask := make(map[int][]TaskGoal, len(taskIDs))
+	taskQuery, taskArgs := taskIDInQuery(taskIDs)
+	goalRows, err := r.db.QueryContext(ctx, fmt.Sprintf(`
+select
+	g.id,
+	g.tid,
+	g.sort,
+	g.type,
+	g.count,
+	g.reduce,
+	coalesce(g.content, ''),
+	ug.uid
+from cfg_task_goal g
+left join sys_user_goal ug on ug.gid = g.id and ug.uid = ?
+where g.tid in (%s)
+order by g.tid asc, g.id asc`, taskQuery), append([]any{uid}, taskArgs...)...)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	defer goalRows.Close()
+
+	for goalRows.Next() {
+		var (
+			goal     TaskGoal
+			reduce   int
+			joinedID sql.NullInt64
+		)
+		if err := goalRows.Scan(
+			&goal.ID,
+			&goal.TaskID,
+			&goal.Sort,
+			&goal.Type,
+			&goal.Count,
+			&reduce,
+			&goal.Content,
+			&joinedID,
+		); err != nil {
+			return TaskSnapshot{}, err
+		}
+		goal.Reduce = reduce != 0
+		completed, current, target, trackable, err := eval.goalStatus(ctx, goal.TaskID, joinedID.Valid && joinedID.Int64 > 0, goal)
+		if err != nil {
+			return TaskSnapshot{}, err
+		}
+		goal.Completed = completed
+		goal.Current = current
+		goal.Target = target
+		goal.Trackable = trackable
+		goal.StatusLabel = taskGoalStatusLabel(goal)
+		goalsByTask[goal.TaskID] = append(goalsByTask[goal.TaskID], goal)
+	}
+	if err := goalRows.Err(); err != nil {
+		return TaskSnapshot{}, err
+	}
+
+	rewardsByTask := make(map[int][]TaskReward, len(taskIDs))
+	rewardRows, err := r.db.QueryContext(ctx, fmt.Sprintf(`
+select
+	tid,
+	sort,
+	type,
+	count,
+	coalesce(name, '')
+from cfg_task_reward
+where tid in (%s)
+order by tid asc, type asc, sort asc`, taskQuery), taskArgs...)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	defer rewardRows.Close()
+
+	for rewardRows.Next() {
+		var (
+			taskID int
+			reward TaskReward
+		)
+		if err := rewardRows.Scan(&taskID, &reward.Sort, &reward.Type, &reward.Count, &reward.Name); err != nil {
+			return TaskSnapshot{}, err
+		}
+		rewardsByTask[taskID] = append(rewardsByTask[taskID], reward)
+	}
+	if err := rewardRows.Err(); err != nil {
+		return TaskSnapshot{}, err
+	}
+
+	for _, task := range taskByID {
+		task.Goals = goalsByTask[task.ID]
+		task.Rewards = rewardsByTask[task.ID]
+		task.GoalCount = len(task.Goals)
+		task.CompletedGoals = 0
+		for _, goal := range task.Goals {
+			if goal.Completed {
+				task.CompletedGoals++
+			}
+		}
+		task.Completed = task.GoalCount > 0 && task.CompletedGoals == task.GoalCount
+	}
+
+	for _, groupType := range categoryOrder {
+		category := TaskCategory{
+			Type:   groupType,
+			Label:  taskGroupTypeLabel(groupType),
+			Groups: []TaskGroup{},
+		}
+
+		for _, groupID := range groupIDsByType[groupType] {
+			source := groupMap[groupID]
+			if source == nil {
+				continue
+			}
+
+			group := *source
+			group.Tasks = make([]TaskCard, 0, len(tasksByGroup[groupID]))
+			for _, task := range tasksByGroup[groupID] {
+				group.Tasks = append(group.Tasks, *task)
+				group.Total++
+				category.TaskCount++
+				snapshot.Summary.TaskCount++
+				if task.Completed {
+					group.Completed++
+					category.Completed++
+					snapshot.Summary.CompletedTasks++
+				}
+			}
+			category.Groups = append(category.Groups, group)
+			category.GroupCount++
+			snapshot.Summary.GroupCount++
+			if group.Total > 0 && group.Completed == group.Total {
+				snapshot.Summary.CompletedGroups++
+			}
+		}
+
+		if category.GroupCount > 0 {
+			snapshot.Categories = append(snapshot.Categories, category)
+			snapshot.Summary.CategoryCount++
+		}
+	}
+
+	snapshot.Summary.PendingTasks = snapshot.Summary.TaskCount - snapshot.Summary.CompletedTasks
+	return snapshot, nil
+}
+
+func (r *Repository) currentBattleTaskContext(ctx context.Context, uid int) (int, int, error) {
+	var bid int
+	var unionID int
+	err := r.db.QueryRowContext(ctx, `
+select
+	coalesce(nullif(s.bid, 0), f.bid, 0),
+	coalesce(s.unionid, 0)
+from sys_user_battle_state s
+left join sys_user_battle_field f on f.id = s.battlefieldid
+where s.uid = ?
+limit 1`, uid).Scan(&bid, &unionID)
+	if err == sql.ErrNoRows {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	return bid, unionID, nil
+}
+
+func battleTaskGroupIDs(bid int, unionID int) []int {
+	if bid == 1001 || unionID == 1 {
+		return []int{60000, 60001, 60002, 60003, 60004}
+	}
+	switch unionID {
+	case 3:
+		return []int{60005, 60006, 60007, 60008, 60009, 60010}
+	case 4:
+		return []int{60011, 60012, 60013, 60014, 60015, 60016, 60017, 60018}
+	default:
+		return nil
+	}
+}
+
+func (r *Repository) battleTaskCards(ctx context.Context, uid int, groupIDs []int) (map[int][]*TaskCard, map[int]*TaskCard, []int, error) {
+	tasksByGroup, taskByID, taskIDs, err := r.queryBattleTaskCards(ctx, `
+select
+	t.id,
+	t.`+"`group`"+`,
+	t.pretid,
+	t.name,
+	coalesce(t.content, ''),
+	coalesce(t.todo, '')
+from sys_user_task u
+join cfg_task t on t.id = u.tid
+where u.uid = ? and u.state = 0 and t.`+"`group`"+` in (%s)
+order by t.`+"`group`"+` asc, t.id asc`, append([]any{uid}, taskIDArgs(groupIDs)...)...)
+	if err != nil || len(taskIDs) > 0 {
+		return tasksByGroup, taskByID, taskIDs, err
+	}
+	return r.queryBattleTaskCards(ctx, `
+select
+	t.id,
+	t.`+"`group`"+`,
+	t.pretid,
+	t.name,
+	coalesce(t.content, ''),
+	coalesce(t.todo, '')
+from cfg_task t
+where t.`+"`group`"+` in (%s) and t.pretid = -1
+order by t.`+"`group`"+` asc, t.id asc`, taskIDArgs(groupIDs)...)
+}
+
+func taskIDArgs(ids []int) []any {
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	return args
+}
+
+func (r *Repository) queryBattleTaskCards(ctx context.Context, queryTemplate string, args ...any) (map[int][]*TaskCard, map[int]*TaskCard, []int, error) {
+	groupCount := len(args)
+	if strings.Contains(queryTemplate, "u.uid = ?") {
+		groupCount--
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", groupCount), ",")
+	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(queryTemplate, placeholders), args...)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer rows.Close()
+
+	tasksByGroup := make(map[int][]*TaskCard)
+	taskByID := make(map[int]*TaskCard)
+	taskIDs := make([]int, 0, 32)
+	for rows.Next() {
+		task := &TaskCard{
+			Goals:   []TaskGoal{},
+			Rewards: []TaskReward{},
+		}
+		if err := rows.Scan(
+			&task.ID,
+			&task.GroupID,
+			&task.PreTaskID,
+			&task.Name,
+			&task.Content,
+			&task.Todo,
+		); err != nil {
+			return nil, nil, nil, err
+		}
+		tasksByGroup[task.GroupID] = append(tasksByGroup[task.GroupID], task)
+		taskByID[task.ID] = task
+		taskIDs = append(taskIDs, task.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	return tasksByGroup, taskByID, taskIDs, nil
+}
+
 type taskEvalContext struct {
 	repo *Repository
 	uid  int

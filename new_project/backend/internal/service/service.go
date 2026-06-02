@@ -183,6 +183,10 @@ func (s Service) MyTasks(ctx context.Context, uid int) (legacy.TaskSnapshot, err
 	return s.repo.MyTasks(ctx, uid)
 }
 
+func (s Service) BattleTasksSnapshot(ctx context.Context, uid int, bidHint int, unionIDHint int) (legacy.TaskSnapshot, error) {
+	return s.repo.BattleTasksSnapshot(ctx, uid, bidHint, unionIDHint)
+}
+
 func (s Service) ClaimTaskReward(ctx context.Context, uid int, taskID int) (legacy.TaskSnapshot, error) {
 	return s.repo.ClaimTaskReward(ctx, uid, taskID)
 }
@@ -335,8 +339,44 @@ func (s Service) MyTroops(ctx context.Context, uid int, limit int) (legacy.Troop
 	return s.repo.MyTroops(ctx, uid, limit)
 }
 
-func (s Service) DispatchCityTroop(ctx context.Context, uid int, cid int, targetCID int, soldierSID int, soldierCount int, task int, resource legacy.TroopResource) (legacy.TroopPage, error) {
-	return s.repo.DispatchCityTroop(ctx, uid, cid, targetCID, soldierSID, soldierCount, task, resource)
+func (s Service) DispatchCityTroop(ctx context.Context, uid int, cid int, targetCID int, soldiers map[int]int64, heroID int, task int, resource legacy.TroopResource) (legacy.TroopPage, error) {
+	return s.repo.DispatchCityTroop(ctx, uid, cid, targetCID, soldiers, heroID, task, resource)
+}
+
+func (s Service) BattleFieldState(ctx context.Context, uid int, battlefieldID int, unionID int, cid int, fieldName string) (legacy.BattleFieldState, error) {
+	return s.repo.BattleFieldState(ctx, uid, battlefieldID, unionID, cid, fieldName)
+}
+
+func (s Service) BattleQuitPreview(ctx context.Context, uid int) (legacy.BattleQuitPreview, error) {
+	return s.repo.BattleQuitPreview(ctx, uid)
+}
+
+func (s Service) BattleTroopDetail(ctx context.Context, uid int, troopID int) (legacy.BattleTroopDetail, error) {
+	return s.repo.BattleTroopDetail(ctx, uid, troopID)
+}
+
+func (s Service) BattleArmySendPreview(ctx context.Context, uid int, troopID int, targetCID int, targetName string) (legacy.BattleArmySendPreview, error) {
+	return s.repo.BattleArmySendPreview(ctx, uid, troopID, targetCID, targetName)
+}
+
+func (s Service) BattleCampaignPreview(ctx context.Context, uid int, cid int, targetCID int, heroID int, soldiers map[int]int64, useFlag bool) (legacy.BattleCampaignPreview, error) {
+	return s.repo.BattleCampaignPreview(ctx, uid, cid, targetCID, heroID, soldiers, useFlag)
+}
+
+func (s Service) BattleArmyAttackPreview(ctx context.Context, uid int, troopID int, targetTroopID int, targetName string) (legacy.BattleArmyAttackPreview, error) {
+	return s.repo.BattleArmyAttackPreview(ctx, uid, troopID, targetTroopID, targetName)
+}
+
+func (s Service) BattlePatrolPreview(ctx context.Context, uid int, troopID int, targetTroopID int) (legacy.BattlePatrolPreview, error) {
+	return s.repo.BattlePatrolPreview(ctx, uid, troopID, targetTroopID)
+}
+
+func (s Service) BattleMembersSnapshot(ctx context.Context, uid int) (legacy.BattleMembersSnapshot, error) {
+	return s.repo.BattleMembersSnapshot(ctx, uid)
+}
+
+func (s Service) BattleFieldNewsPage(ctx context.Context, uid int, battlefieldID int, unionID int, page int, pageSize int) (legacy.BattleFieldNewsPage, error) {
+	return s.repo.BattleFieldNewsPage(ctx, uid, battlefieldID, unionID, page, pageSize)
 }
 
 func (s Service) CityBarracksSnapshot(ctx context.Context, uid int, cid int, position int) (legacy.CityBarracksSnapshot, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,15 +32,24 @@ type troopRecord struct {
 	Resource  string
 }
 
-func (r *Repository) DispatchCityTroop(ctx context.Context, uid int, cid int, targetCID int, soldierSID int, soldierCount int, task int, resource TroopResource) (TroopPage, error) {
+type troopSoldierStats struct {
+	People  int64
+	FoodUse float64
+}
+
+func (r *Repository) DispatchCityTroop(ctx context.Context, uid int, cid int, targetCID int, soldiers map[int]int64, heroID int, task int, resource TroopResource) (TroopPage, error) {
 	if targetCID <= 0 || targetCID == cid {
 		return TroopPage{}, newInvalidError("目标城池无效。")
 	}
-	if soldierSID <= 0 || soldierCount <= 0 {
-		return TroopPage{}, newInvalidError("派遣兵力无效。")
-	}
 	if task < 0 || task > 3 {
 		return TroopPage{}, newInvalidError("only task=0, task=1, task=2, task=3 are supported")
+	}
+	if taskRequiresHero(task) && heroID <= 0 {
+		return TroopPage{}, newInvalidError("task=3 requires hero")
+	}
+	soldierPayload, _, err := normalizeTroopSoldiers(soldiers)
+	if err != nil {
+		return TroopPage{}, err
 	}
 	resourcePayload, err := normalizeTroopResource(resource)
 	if err != nil {
@@ -50,15 +60,15 @@ func (r *Repository) DispatchCityTroop(ctx context.Context, uid int, cid int, ta
 	}
 
 	if task == 2 {
-		if soldierSID != scoutSoldierSID {
-			return TroopPage{}, newInvalidError("task=2 only supports scout sid=3")
+		if soldierPayload[scoutSoldierSID] <= 0 {
+			return TroopPage{}, newInvalidError("task=2 requires scout sid=3")
 		}
 		if !resourcePayload.isZero() {
 			return TroopPage{}, newInvalidError("task=2 does not support resources")
 		}
 	}
 	if task == 3 {
-		if soldierSID == scoutSoldierSID {
+		if len(soldierPayload) == 1 && soldierPayload[scoutSoldierSID] > 0 {
 			return TroopPage{}, newInvalidError("task=3 does not support scout-only army")
 		}
 		if !resourcePayload.isZero() {
@@ -96,7 +106,7 @@ func (r *Repository) DispatchCityTroop(ctx context.Context, uid int, cid int, ta
 	}
 
 	if r.db == nil {
-		return r.fixtureDispatchTroop(uid, cid, targetCID, soldierSID, soldierCount, task, resourcePayload)
+		return r.fixtureDispatchTroop(uid, cid, targetCID, soldierPayload, heroID, task, resourcePayload)
 	}
 
 	if err := r.settleDueTroops(ctx, uid); err != nil {
@@ -125,12 +135,19 @@ func (r *Repository) DispatchCityTroop(ctx context.Context, uid int, cid int, ta
 		return TroopPage{}, newInvalidError("校场容量不足，无法继续派遣。")
 	}
 
-	availableSoldiers, err := r.citySoldierCount(ctx, tx, cid, soldierSID)
-	if err != nil {
-		return TroopPage{}, err
+	if heroID > 0 {
+		if err := r.ensureDispatchHeroTx(ctx, tx, uid, cid, heroID); err != nil {
+			return TroopPage{}, err
+		}
 	}
-	if availableSoldiers < int64(soldierCount) {
-		return TroopPage{}, newInvalidError("兵力不足，无法派遣。")
+	for soldierSID, soldierCount := range soldierPayload {
+		availableSoldiers, err := r.citySoldierCount(ctx, tx, cid, soldierSID)
+		if err != nil {
+			return TroopPage{}, err
+		}
+		if availableSoldiers < soldierCount {
+			return TroopPage{}, newInvalidError("兵力不足，无法派遣。")
+		}
 	}
 	if task == 3 {
 		targetSnapshot, err := r.loadPlunderTargetSnapshotTx(ctx, tx, targetCID)
@@ -142,16 +159,26 @@ func (r *Repository) DispatchCityTroop(ctx context.Context, uid int, cid int, ta
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	for soldierSID, soldierCount := range soldierPayload {
+		result, err := tx.ExecContext(ctx, `
 update sys_city_soldier
 set count = count - ?
 where cid = ? and sid = ? and count >= ?`,
-		soldierCount,
-		cid,
-		soldierSID,
-		soldierCount,
-	); err != nil {
-		return TroopPage{}, err
+			soldierCount,
+			cid,
+			soldierSID,
+			soldierCount,
+		)
+		if err != nil {
+			return TroopPage{}, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return TroopPage{}, err
+		}
+		if affected == 0 {
+			return TroopPage{}, newInvalidError("兵力不足，无法派遣。")
+		}
 	}
 	if task == 0 && !resourcePayload.isZero() {
 		if err := r.subtractCityResourcesTx(ctx, tx, cid, resourcePayload); err != nil {
@@ -167,14 +194,19 @@ where cid = ? and sid = ? and count >= ?`,
 	}
 
 	now := time.Now().Unix()
-	soldiersRaw := formatTroopSoldiersRaw(map[int]int64{soldierSID: int64(soldierCount)})
+	soldiersRaw := formatTroopSoldiersRaw(soldierPayload)
 	resourceRaw := formatTroopResourceRaw(resourcePayload)
+	soldierStats, err := r.troopSoldierStatsTx(ctx, tx, soldierPayload)
+	if err != nil {
+		return TroopPage{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 insert into sys_troops (uid, cid, startcid, hid, targetcid, task, state, starttime, pathtime, endtime, soldiers, resource, people, fooduse)
-values (?, ?, ?, 0, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)`,
+values (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
 		uid,
 		cid,
 		cid,
+		heroID,
 		targetCID,
 		task,
 		now,
@@ -182,9 +214,15 @@ values (?, ?, ?, 0, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)`,
 		now+minimalTroopPathSeconds,
 		soldiersRaw,
 		resourceRaw,
-		soldierCount,
+		soldierStats.People,
+		soldierStats.FoodUse,
 	); err != nil {
 		return TroopPage{}, err
+	}
+	if heroID > 0 {
+		if _, err := tx.ExecContext(ctx, "update sys_city_hero set state = 2 where hid = ? and uid = ? and cid = ?", heroID, uid, cid); err != nil {
+			return TroopPage{}, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -227,25 +265,12 @@ func (r *Repository) CallbackTroop(ctx context.Context, uid int, troopID int) (T
 	if record.State == 3 {
 		return TroopPage{}, newInvalidError("战斗中的部队不能撤回。")
 	}
-	if record.State != 0 && record.State != 2 && record.State != 4 {
+	if !canCallbackTroopState(record.State) {
 		return TroopPage{}, newInvalidError("当前部队状态不支持撤回。")
 	}
 
 	now := time.Now().Unix()
-	endTime := now + int64(record.PathTime)
-	if record.State == 0 {
-		elapsed := now - record.StartTime
-		if elapsed < 0 {
-			elapsed = 0
-		}
-		endTime = now + elapsed
-	}
-	startCID := record.StartCID
-	targetCID := record.TargetCID
-	if record.Task == 1 && record.State == 4 {
-		startCID = record.TargetCID
-		targetCID = record.CID
-	}
+	startCID, targetCID, endTime := callbackTroopReturnRoute(record, now)
 
 	if _, err := tx.ExecContext(ctx, `
 update sys_troops
@@ -260,7 +285,10 @@ where id = ?`,
 		return TroopPage{}, err
 	}
 
-	if record.State == 2 || record.State == 4 {
+	if callbackTroopMarksCityResources(record.State) {
+		if err := r.setTroopHeroStateTx(ctx, tx, uid, record.CID, record.HID, 2); err != nil {
+			return TroopPage{}, err
+		}
 		if err := r.ensureCityResAdd(ctx, tx, record.CID); err != nil {
 			return TroopPage{}, err
 		}
@@ -287,14 +315,8 @@ func (r *Repository) settleDueTroops(ctx context.Context, uid int) error {
 		return nil
 	}
 
-	rows, err := r.db.QueryContext(ctx, `
-select id, uid, cid, startcid, targetcid, hid, task, state, starttime, pathtime, endtime, soldiers, resource
-from sys_troops
-where uid = ? and task in (0, 1, 2, 3) and endtime > 0 and endtime <= ? and state in (0, 1)
-order by id asc`,
-		uid,
-		time.Now().Unix(),
-	)
+	query, args := dueTroopsQuery(uid, time.Now().Unix())
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -335,6 +357,20 @@ order by id asc`,
 	return nil
 }
 
+func dueTroopsQuery(uid int, now int64) (string, []any) {
+	return `
+select id, uid, cid, startcid, targetcid, hid, task, state, starttime, pathtime, endtime, soldiers, resource
+from sys_troops
+where (uid = ? or targetcid in (select cid from sys_city where uid = ?))
+  and task in (0, 1, 2, 3, 4) and endtime > 0 and endtime <= ? and state in (0, 1, 5)
+order by id asc`,
+		[]any{
+			uid,
+			uid,
+			now,
+		}
+}
+
 func (r *Repository) settleDueTroop(ctx context.Context, record troopRecord) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -349,7 +385,7 @@ func (r *Repository) settleDueTroop(ctx context.Context, record troopRecord) err
 		}
 		return err
 	}
-	if (current.Task != 0 && current.Task != 1 && current.Task != 2 && current.Task != 3) || (current.State != 0 && current.State != 1) || current.EndTime > time.Now().Unix() {
+	if !isSettledTroopTask(current.Task) || !isDueTroopState(current.State) || current.EndTime > time.Now().Unix() {
 		return tx.Commit()
 	}
 
@@ -359,22 +395,28 @@ func (r *Repository) settleDueTroop(ctx context.Context, record troopRecord) err
 	if current.Task == 2 && current.State == 0 {
 		attackerScouts := soldierCounts[scoutSoldierSID]
 		if attackerScouts <= 0 {
+			if err := r.restoreTroopHeroStateTx(ctx, tx, current.UID, current.CID, current.HID); err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, "delete from sys_troops where id = ?", current.ID); err != nil {
 				return err
 			}
 			return tx.Commit()
 		}
 
-		targetSnapshot, err := r.loadPlunderTargetSnapshotTx(ctx, tx, current.TargetCID)
+		targetSnapshot, targetIsCity, err := r.loadScoutTargetSnapshotTx(ctx, tx, current.TargetCID)
 		if err != nil {
 			return err
 		}
 		fromCity := r.cityNameTx(ctx, tx, current.CID)
 		targetCity := firstNonEmpty(targetSnapshot.CityName, r.cityNameTx(ctx, tx, current.TargetCID))
 
-		defenderScouts, err := r.citySoldierCount(ctx, tx, current.TargetCID, scoutSoldierSID)
-		if err != nil {
-			return err
+		defenderScouts := int64(0)
+		if targetIsCity {
+			defenderScouts, err = r.citySoldierCount(ctx, tx, current.TargetCID, scoutSoldierSID)
+			if err != nil {
+				return err
+			}
 		}
 
 		attackerSurvivors := attackerScouts
@@ -399,7 +441,7 @@ func (r *Repository) settleDueTroop(ctx context.Context, record troopRecord) err
 		if defenderRemaining < 0 {
 			defenderRemaining = 0
 		}
-		if defenderRemaining != defenderScouts {
+		if targetIsCity && defenderRemaining != defenderScouts {
 			if err := r.setCitySoldierCountTx(ctx, tx, current.TargetCID, scoutSoldierSID, defenderRemaining); err != nil {
 				return err
 			}
@@ -446,7 +488,11 @@ func (r *Repository) settleDueTroop(ctx context.Context, record troopRecord) err
 			}
 		}
 
-		if attackerSurvivors <= 0 {
+		returnSoldiersRaw := formatScoutReturnSoldiersRaw(soldierCounts, attackerSurvivors)
+		if returnSoldiersRaw == "" {
+			if err := r.restoreTroopHeroStateTx(ctx, tx, current.UID, current.CID, current.HID); err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, "delete from sys_troops where id = ?", current.ID); err != nil {
 				return err
 			}
@@ -459,7 +505,7 @@ set state = 1, starttime = ?, endtime = ?, soldiers = ?, resource = ?
 where id = ? and state = 0`,
 			settleAt,
 			settleAt+int64(current.PathTime),
-			formatTroopSoldiersRaw(map[int]int64{scoutSoldierSID: attackerSurvivors}),
+			returnSoldiersRaw,
 			formatTroopResourceRaw(TroopResource{}),
 			current.ID,
 		); err != nil {
@@ -546,6 +592,9 @@ where id = ? and state = 0`,
 		); err != nil {
 			return err
 		}
+		if err := r.setTroopHeroStateTx(ctx, tx, current.UID, current.CID, current.HID, 4); err != nil {
+			return err
+		}
 
 		reportInput := stationReportInput{
 			HomeCID:     current.CID,
@@ -583,7 +632,7 @@ where id = ? and state = 0`,
 			if err != nil {
 				return err
 			}
-			loot = computePlunderLoot(targetSnapshot, carryCapacity)
+			loot = plunderLootForSettlement(targetSnapshot, carryCapacity)
 			if loot.isZero() {
 				note = "目标城池的资源均处于仓储保护范围内，本次未掠得资源，部队空载返程。"
 			} else {
@@ -674,11 +723,78 @@ where id = ? and state = 0`,
 	if _, err := tx.ExecContext(ctx, "update sys_city_res_add set resource_changing = 1 where cid = ?", targetCity); err != nil {
 		return err
 	}
+	if err := r.restoreTroopHeroStateTx(ctx, tx, current.UID, targetCity, current.HID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "delete from sys_troops where id = ?", current.ID); err != nil {
 		return err
 	}
 
 	return tx.Commit()
+}
+
+func canCallbackTroopState(state int) bool {
+	switch state {
+	case 0, 2, 4, 5:
+		return true
+	default:
+		return false
+	}
+}
+
+func isSettledTroopTask(task int) bool {
+	switch task {
+	case 0, 1, 2, 3, 4:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskRequiresHero(task int) bool {
+	switch task {
+	case 3, 4:
+		return true
+	default:
+		return false
+	}
+}
+
+func isDueTroopState(state int) bool {
+	switch state {
+	case 0, 1, 5:
+		return true
+	default:
+		return false
+	}
+}
+
+func callbackTroopMarksCityResources(state int) bool {
+	switch state {
+	case 2, 4, 5:
+		return true
+	default:
+		return false
+	}
+}
+
+func callbackTroopReturnRoute(record troopRecord, now int64) (int, int, int64) {
+	endTime := now + int64(record.PathTime)
+	if record.State == 0 {
+		elapsed := now - record.StartTime
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		endTime = now + elapsed
+	}
+
+	startCID := record.StartCID
+	targetCID := record.TargetCID
+	if record.State == 4 || record.State == 5 {
+		startCID = record.TargetCID
+		targetCID = record.CID
+	}
+	return startCID, targetCID, endTime
 }
 
 func (r *Repository) cityBuildingLevel(ctx context.Context, tx *sql.Tx, cid int, bid int) (int, error) {
@@ -694,8 +810,12 @@ func (r *Repository) cityBuildingLevel(ctx context.Context, tx *sql.Tx, cid int,
 
 func (r *Repository) cityActiveTroopCount(ctx context.Context, tx *sql.Tx, uid int, cid int) (int, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, "select count(*) from sys_troops where cid = ? and uid = ? and state < 4", cid, uid).Scan(&count)
+	err := tx.QueryRowContext(ctx, cityActiveTroopCountSQL(), cid, uid).Scan(&count)
 	return count, err
+}
+
+func cityActiveTroopCountSQL() string {
+	return "select count(*) from sys_troops where cid = ? and uid = ? and state < 4"
 }
 
 func (r *Repository) citySoldierCount(ctx context.Context, tx *sql.Tx, cid int, sid int) (int64, error) {
@@ -801,8 +921,96 @@ on duplicate key update count = values(count)`,
 	return err
 }
 
+func (r *Repository) ensureDispatchHeroTx(ctx context.Context, tx *sql.Tx, uid int, cid int, hid int) error {
+	if hid <= 0 {
+		return nil
+	}
+
+	var state int
+	if err := tx.QueryRowContext(ctx, `
+select state
+from sys_city_hero
+where cid = ? and uid = ? and hid = ?`, cid, uid, hid).Scan(&state); err != nil {
+		if err == sql.ErrNoRows {
+			return newInvalidError("出征将领无效。")
+		}
+		return err
+	}
+	if state == 2 || state == 3 || state == 5 || state == 6 {
+		return newInvalidError("将领出征中，不能再次派遣。")
+	}
+
+	busy, err := r.heroIsInTroop(ctx, tx, hid)
+	if err != nil {
+		return err
+	}
+	if busy {
+		return newInvalidError("将领出征中，不能再次派遣。")
+	}
+	return nil
+}
+
+func (r *Repository) setTroopHeroStateTx(ctx context.Context, tx *sql.Tx, uid int, cid int, hid int, state int) error {
+	if hid <= 0 {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, "update sys_city_hero set state = ? where hid = ? and uid = ? and cid = ?", state, hid, uid, cid)
+	return err
+}
+
+func (r *Repository) restoreTroopHeroStateTx(ctx context.Context, tx *sql.Tx, uid int, cid int, hid int) error {
+	if hid <= 0 {
+		return nil
+	}
+
+	state := 0
+	heroCID := cid
+	if err := tx.QueryRowContext(ctx, "select cid from sys_city_hero where hid = ? and uid = ?", hid, uid).Scan(&heroCID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+
+	var chiefHID, generalHID, counsellorHID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+select chiefhid, generalid, counsellorid
+from sys_city
+where cid = ? and uid = ?`, heroCID, uid).Scan(&chiefHID, &generalHID, &counsellorHID); err != nil {
+		if err != sql.ErrNoRows {
+			return err
+		}
+	} else {
+		switch int64(hid) {
+		case chiefHID.Int64:
+			state = 1
+		case generalHID.Int64:
+			state = 7
+		case counsellorHID.Int64:
+			state = 8
+		}
+	}
+	return r.setTroopHeroStateTx(ctx, tx, uid, heroCID, hid, state)
+}
+
 func (p TroopResource) isZero() bool {
 	return p.Gold == 0 && p.Food == 0 && p.Wood == 0 && p.Rock == 0 && p.Iron == 0
+}
+
+func normalizeTroopSoldiers(soldiers map[int]int64) (map[int]int64, int64, error) {
+	normalized := make(map[int]int64, len(soldiers))
+	var total int64
+	for sid, count := range soldiers {
+		if sid <= 0 || count <= 0 {
+			continue
+		}
+		normalized[sid] += count
+		total += count
+	}
+	if total <= 0 {
+		return nil, 0, newInvalidError("派遣兵力无效。")
+	}
+	return normalized, total, nil
 }
 
 func normalizeTroopResource(resource TroopResource) (TroopResource, error) {
@@ -812,14 +1020,42 @@ func normalizeTroopResource(resource TroopResource) (TroopResource, error) {
 	return resource, nil
 }
 
+func (r *Repository) troopSoldierStatsTx(ctx context.Context, tx *sql.Tx, soldiers map[int]int64) (troopSoldierStats, error) {
+	stats := troopSoldierStats{}
+	for sid, count := range soldiers {
+		if sid <= 0 || count <= 0 {
+			continue
+		}
+
+		var peopleNeed sql.NullInt64
+		var foodUse sql.NullFloat64
+		if err := tx.QueryRowContext(ctx, "select coalesce(people_need, 0), coalesce(food_use, 0) from cfg_soldier where sid = ?", sid).Scan(&peopleNeed, &foodUse); err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return troopSoldierStats{}, err
+		}
+		stats.People += peopleNeed.Int64 * count
+		stats.FoodUse += foodUse.Float64 * float64(count)
+	}
+	return stats, nil
+}
+
 func formatTroopResourceRaw(payload TroopResource) string {
 	return fmt.Sprintf("%d,%d,%d,%d,%d", payload.Gold, payload.Food, payload.Wood, payload.Rock, payload.Iron)
 }
 
 func (r *Repository) addCityResourcesTx(ctx context.Context, tx *sql.Tx, cid int, payload TroopResource) error {
-	_, err := tx.ExecContext(ctx, `
+	if payload.isZero() {
+		return nil
+	}
+	if err := r.ensureCityResourceRowTx(ctx, tx, cid); err != nil {
+		return err
+	}
+
+	result, err := tx.ExecContext(ctx, `
 update mem_city_resource
-set wood = wood + ?, rock = rock + ?, iron = iron + ?, food = food + ?, gold = gold + ?
+set wood = coalesce(wood, 0) + ?, rock = coalesce(rock, 0) + ?, iron = coalesce(iron, 0) + ?, food = coalesce(food, 0) + ?, gold = coalesce(gold, 0) + ?
 where cid = ?`,
 		payload.Wood,
 		payload.Rock,
@@ -828,7 +1064,33 @@ where cid = ?`,
 		payload.Gold,
 		cid,
 	)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected <= 0 {
+		return newInvalidError("target city resource row is missing; resources were not added")
+	}
+	return nil
+}
+
+func (r *Repository) ensureCityResourceRowTx(ctx context.Context, tx *sql.Tx, cid int) error {
+	_, err := tx.ExecContext(ctx, ensureCityResourceRowSQL(), cid)
 	return err
+}
+
+func ensureCityResourceRowSQL() string {
+	return `
+insert ignore into mem_city_resource (
+	` + "`cid`,`people`,`food`,`wood`,`rock`,`iron`,`gold`,`food_max`,`wood_max`,`rock_max`,`iron_max`,`gold_max`,`food_add`,`wood_add`,`rock_add`,`iron_add`,`lastupdate`" + `
+)
+select cid,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,unix_timestamp()
+from sys_city
+where cid = ?`
 }
 
 func (r *Repository) subtractCityResourcesTx(ctx context.Context, tx *sql.Tx, cid int, payload TroopResource) error {
@@ -863,40 +1125,84 @@ where cid = ? and wood >= ? and rock >= ? and iron >= ? and food >= ? and gold >
 }
 
 func formatTroopSoldiersRaw(soldiers map[int]int64) string {
-	parts := make([]string, 0, len(soldiers)*2)
-	for sid, count := range soldiers {
-		if sid <= 0 || count <= 0 {
-			continue
+	parts := make([]string, 0, 1+len(soldiers)*2)
+	ids := make([]int, 0, len(soldiers))
+	for sid := range soldiers {
+		if sid > 0 && soldiers[sid] > 0 {
+			ids = append(ids, sid)
 		}
+	}
+	sort.Ints(ids)
+	parts = append(parts, strconv.Itoa(len(ids)))
+	for _, sid := range ids {
+		count := soldiers[sid]
 		parts = append(parts, strconv.Itoa(sid), strconv.FormatInt(count, 10))
 	}
-	if len(parts) == 0 {
+	if len(ids) == 0 {
 		return ""
 	}
 	return strings.Join(parts, ",") + ","
 }
 
-func parseTroopSoldierCounts(raw string) map[int]int64 {
-	parts := strings.Split(strings.TrimSpace(raw), ",")
-	soldiers := make(map[int]int64, len(parts)/2)
-	for index := 0; index+1 < len(parts); index += 2 {
-		sidText := strings.TrimSpace(parts[index])
-		countText := strings.TrimSpace(parts[index+1])
-		if sidText == "" || countText == "" {
-			continue
-		}
+func formatScoutReturnSoldiersRaw(soldiers map[int]int64, survivingScouts int64) string {
+	returning := make(map[int]int64, len(soldiers))
+	for sid, count := range soldiers {
+		returning[sid] = count
+	}
+	returning[scoutSoldierSID] = survivingScouts
+	return formatTroopSoldiersRaw(returning)
+}
 
-		sid, err := strconv.Atoi(sidText)
+func parseTroopSoldierCounts(raw string) map[int]int64 {
+	pairs := parseTroopSoldierPairs(raw)
+	soldiers := make(map[int]int64, len(pairs))
+	for _, pair := range pairs {
+		soldiers[pair.sid] += pair.count
+	}
+	return soldiers
+}
+
+type troopSoldierPair struct {
+	sid   int
+	count int64
+}
+
+func parseTroopSoldierPairs(raw string) []troopSoldierPair {
+	tokens := troopSoldierTokens(raw)
+	if len(tokens) == 0 {
+		return []troopSoldierPair{}
+	}
+
+	start := 0
+	if typeCount, err := strconv.Atoi(tokens[0]); err == nil && typeCount >= 0 && len(tokens) == 1+typeCount*2 {
+		start = 1
+	}
+
+	pairs := make([]troopSoldierPair, 0, (len(tokens)-start)/2)
+	for index := start; index+1 < len(tokens); index += 2 {
+		sid, err := strconv.Atoi(tokens[index])
 		if err != nil || sid <= 0 {
 			continue
 		}
-		count, err := strconv.ParseInt(countText, 10, 64)
+		count, err := strconv.ParseInt(tokens[index+1], 10, 64)
 		if err != nil || count <= 0 {
 			continue
 		}
-		soldiers[sid] += count
+		pairs = append(pairs, troopSoldierPair{sid: sid, count: count})
 	}
-	return soldiers
+	return pairs
+}
+
+func troopSoldierTokens(raw string) []string {
+	parts := strings.Split(strings.TrimSpace(raw), ",")
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		token := strings.TrimSpace(part)
+		if token != "" {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens
 }
 
 func parseTroopResourcePayload(raw string) TroopResource {
@@ -929,8 +1235,10 @@ func parseTroopResourcePayload(raw string) TroopResource {
 	}
 }
 
-func (r *Repository) fixtureDispatchTroop(uid int, cid int, targetCID int, soldierSID int, soldierCount int, task int, resource TroopResource) (TroopPage, error) {
+func (r *Repository) fixtureDispatchTroop(uid int, cid int, targetCID int, soldiers map[int]int64, heroID int, task int, resource TroopResource) (TroopPage, error) {
 	page := r.fixtureTroopPage(uid)
+	soldierNames := r.loadSoldierNames(context.Background())
+	reportSoldiers, soldierTotal := parseTroopSoldiers(formatTroopSoldiersRaw(soldiers), soldierNames)
 	page.Items = append([]TroopCard{
 		{
 			ID:           9901,
@@ -940,7 +1248,7 @@ func (r *Repository) fixtureDispatchTroop(uid int, cid int, targetCID int, soldi
 			TargetCID:    targetCID,
 			FromCity:     formatCIDLabel(cid),
 			TargetCity:   formatCIDLabel(targetCID),
-			HeroID:       0,
+			HeroID:       heroID,
 			HeroName:     "--",
 			Task:         task,
 			TaskLabel:    troopTaskLabel(task),
@@ -950,14 +1258,14 @@ func (r *Repository) fixtureDispatchTroop(uid int, cid int, targetCID int, soldi
 			EndTime:      time.Now().Add(minimalTroopPathSeconds * time.Second).Unix(),
 			PathTime:     minimalTroopPathSeconds,
 			SecondsLeft:  minimalTroopPathSeconds,
-			People:       int64(soldierCount),
+			People:       soldierTotal,
 			FoodUse:      0,
-			SoldiersRaw:  fmt.Sprintf("%d,%d,", soldierSID, soldierCount),
+			SoldiersRaw:  formatTroopSoldiersRaw(soldiers),
 			ResourceRaw:  formatTroopResourceRaw(resource),
 			Resources:    resource,
 			Resource:     resource,
-			Soldiers:     []Soldier{{SID: soldierSID, Name: fmt.Sprintf("SID %d", soldierSID), Count: int64(soldierCount)}},
-			SoldierCount: int64(soldierCount),
+			Soldiers:     reportSoldiers,
+			SoldierCount: soldierTotal,
 		},
 	}, page.Items...)
 	page.Total = len(page.Items)
